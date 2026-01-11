@@ -1,86 +1,94 @@
 use std::fs;
 use std::io;
 use std::path::Path;
+use zip::result::ZipError;
 
 fn main() {
     std::process::exit(real_main());
 }
 
 fn real_main() -> i32 {
-    // Collect command-line arguments
     let args: Vec<String> = std::env::args().collect();
 
-    // Expect: program <zip_file>
-    if args.len() != 2 {
-        eprintln!("Usage: {} <zipfile>", args[0]);
+    if args.len() < 2 {
+        eprintln!("Usage: {} <zipfile> [output_path]", args[0]);
         return 1;
     }
 
     let zip_path = Path::new(&args[1]);
+    let output_path = args.get(2).map(Path::new);
 
-    // Open the zip file
-    let file = match fs::File::open(zip_path) {
-        Ok(f) => f,
-        Err(e) => {
-            eprintln!("Failed to open zip file: {}", e);
-            return 1;
-        }
-    };
+    if let Err(e) = decompress(zip_path, output_path) {
+        eprintln!("Error: {}", e);
+        return 1;
+    }
 
-    // Create zip archive reader
-    let mut archive = match zip::ZipArchive::new(file) {
-        Ok(a) => a,
-        Err(e) => {
-            eprintln!("Invalid zip archive: {}", e);
-            return 1;
-        }
-    };
+    0
+}
 
-    // Iterate through files in the zip
+fn decompress(zip_path: &Path, output_path: Option<&Path>) -> Result<(), Box<dyn std::error::Error>> {
+    let file = fs::File::open(zip_path)?;
+    let mut archive = zip::ZipArchive::new(file)?;
+
     for i in 0..archive.len() {
-        let mut zip_file = archive.by_index(i).unwrap();
-
-        // Prevent zip-slip (path traversal attack)
-        let outpath = match zip_file.enclosed_name() {
+        let mut file = archive.by_index(i)?;
+        let outpath = match file.enclosed_name() {
             Some(path) => path.to_owned(),
             None => continue,
         };
 
-        // Print optional comments
-        let comment = zip_file.comment();
-        if !comment.is_empty() {
-            println!(
-                "Extracting {} ({} bytes): {}",
-                outpath.display(),
-                zip_file.size(),
-                comment
-            );
-        }
+        let outpath = if let Some(output_path) = output_path {
+            output_path.join(outpath)
+        } else {
+            outpath
+        };
 
-        // Directory entry
-        if zip_file.name().ends_with('/') {
-            fs::create_dir_all(&outpath).unwrap();
-        } 
-        // File entry
-        else {
-            // Ensure parent directories exist
-            if let Some(parent) = outpath.parent() {
-                fs::create_dir_all(parent).unwrap();
-            }
-
-            let mut outfile = fs::File::create(&outpath).unwrap();
-            io::copy(&mut zip_file, &mut outfile).unwrap();
-
-            // Preserve unix permissions (if present)
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                if let Some(mode) = zip_file.unix_mode() {
-                    fs::set_permissions(&outpath, fs::Permissions::from_mode(mode)).unwrap();
+        if (*file.name()).ends_with('/') {
+            fs::create_dir_all(&outpath)?;
+        } else {
+            if let Some(p) = outpath.parent() {
+                if !p.exists() {
+                    fs::create_dir_all(p)?;
                 }
             }
+            let mut outfile = fs::File::create(&outpath)?;
+            io::copy(&mut file, &mut outfile)?;
         }
     }
 
-    0
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::io::Write;
+    use tempfile::tempdir;
+    use zip::write::{FileOptions, ZipWriter};
+
+    #[test]
+    fn decompress_test() {
+        let dir = tempdir().unwrap();
+        let zip_path = dir.path().join("test.zip");
+        let extract_path = dir.path().join("extracted");
+        fs::create_dir_all(&extract_path).unwrap();
+
+        let file = fs::File::create(&zip_path).unwrap();
+        let mut zip = ZipWriter::new(file);
+
+        let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        zip.start_file("test.txt", options).unwrap();
+        zip.write_all(b"Hello, world!").unwrap();
+        zip.finish().unwrap();
+
+        let result = decompress(&zip_path, Some(&extract_path));
+        assert!(result.is_ok());
+
+        let extracted_file_path = extract_path.join("test.txt");
+        assert!(extracted_file_path.exists());
+
+        let content = fs::read_to_string(extracted_file_path).unwrap();
+        assert_eq!(content, "Hello, world!");
+    }
 }
