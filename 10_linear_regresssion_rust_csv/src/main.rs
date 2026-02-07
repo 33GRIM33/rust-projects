@@ -8,17 +8,17 @@
 // CHECKPOINT: print both vectors to verify
 
 //usign serde to read files
-use serde::Deserialize;
-use std::error::Error;
+// use serde::Deserialize;
+// use std::error::Error;
 
-#[derive(Debug, Deserialize)]
-struct Record {
-    x1: f64,
-    x2: f64,
-    y: f64,
-}
+// #[derive(Debug, Deserialize)]
+// struct Record {
+//     x1: f64,
+//     x2: f64,
+//     y: f64,
+// }
 
-use std::fs;
+// use std::fs;
 
 // fn read_from_csv_file(path: &str) -> Result<Vec<Record>, Box<dyn Error>> {
 //     let mut rdr = csv::Reader::from_path(path)?;
